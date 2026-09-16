@@ -6,13 +6,12 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Planned
-
-- GitHub release update checks and user-approved APK installation
 
 ## [0.1.0] - 2026-09-16
 
 ### Added
+
+- GitHub release checks, approved downloads, APK identity verification, and Android-confirmed installation
 
 - Remote-friendly Android TV interface for Radarr movie search and queue viewing
 - Interactive Radarr release preview and explicit release selection

@@ -37,7 +37,15 @@ Connection details are encrypted with an Android Keystore key and kept in the ap
 
 HTTPS is strongly recommended whenever Radarr is reachable outside a trusted home network. ArrPilot permits cleartext HTTP because many local Radarr installations use an HTTP address on a private LAN.
 
-## Building
+## Updates and installation
+
+Download `ArrPilot-0.1.0.apk` from [GitHub Releases](https://github.com/crunchy-in-milk/ArrPilot/releases). Transfer it to the TV and open it with an APK installer, or use `adb install -r ArrPilot-0.1.0.apk` from a connected computer.
+
+ArrPilot checks the latest stable GitHub release on launch, at most once every six hours. **Settings → Check for updates** always checks immediately. Downloads begin only after you choose **Download**. The app verifies the APK package, version code, and signing certificate before opening Android's installation confirmation. Android may require a one-time permission to install from ArrPilot. Settings are retained during updates.
+
+Maintainers: increment both `versionName` and `versionCode` for each release. Publish a stable GitHub Release tagged `vX.Y.Z` with a permanently signed asset named `ArrPilot-X.Y.Z.apk`. Drafts and prereleases are not offered. The CI debug APK is for development and is not an official update.
+
+## Building from source
 
 Prerequisites:
 

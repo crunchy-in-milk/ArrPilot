@@ -64,6 +64,7 @@ class MainActivity : Activity() {
     private var customDraft = CustomDiscoverFilter()
     private val libraryStates = ConcurrentHashMap<Int, LibraryState>()
     private var libraryStatesLoaded = false
+    private var updateBusy = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -74,6 +75,7 @@ class MainActivity : Activity() {
         releaseAdapter = ReleaseAdapter(this)
         buildShell()
         if (appSettings.isComplete) connect(appSettings) else showSettings()
+        window.decorView.postDelayed({ if (!isFinishing && !isDestroyed) checkForUpdates(false) }, 3000)
     }
 
     private fun buildShell() {
@@ -270,6 +272,7 @@ class MainActivity : Activity() {
         save.nextFocusUpId = SETTINGS_TMDB_KEY_ID
         actions.addView(save)
         actions.addView(navButton("About") { showAbout() })
+        actions.addView(navButton("Check for updates") { checkForUpdates(true) })
         panel.addView(actions, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)))
 
         val scroll = ScrollView(this).apply {
@@ -1169,6 +1172,87 @@ class MainActivity : Activity() {
             .setNeutralButton("About") { _, _ -> showAbout() }
             .setOnDismissListener { updateActiveNav() }
             .show()
+    }
+
+    private fun checkForUpdates(manual: Boolean) {
+        if (updateBusy) { if (manual) toast("An update check or download is already running"); return }
+        val prefs = getPreferences(MODE_PRIVATE)
+        val now = System.currentTimeMillis()
+        if (!manual && now - prefs.getLong("update_check_time", 0) < 6 * 60 * 60 * 1000L) return
+        updateBusy = true
+        if (manual) toast("Checking for updates…")
+        networkExecutor.execute {
+            val result = runCatching { AppUpdates(this).latest() }
+            if (result.isSuccess) prefs.edit().putLong("update_check_time", now).apply()
+            runOnUiThread {
+                updateBusy = false
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                result.fold({ release ->
+                    if (release == null) {
+                        if (manual) AlertDialog.Builder(this).setTitle("ArrPilot is up to date")
+                            .setMessage("Installed version: ${BuildConfig.VERSION_NAME}")
+                            .setPositiveButton("Close", null).show()
+                    } else {
+                        AlertDialog.Builder(this).setTitle("ArrPilot ${release.version} available")
+                            .setMessage("Download this update from GitHub? Android will ask you to confirm installation. Your settings will be kept.")
+                            .setNegativeButton("Later", null)
+                            .setPositiveButton("Download") { _, _ -> downloadUpdate(release) }.show()
+                    }
+                }, { error -> if (manual) showUpdateError(error) })
+            }
+        }
+    }
+
+    private fun downloadUpdate(release: AppRelease) {
+        if (updateBusy) return
+        updateBusy = true
+        toast("Downloading ArrPilot ${release.version}…")
+        networkExecutor.execute {
+            val result = runCatching { AppUpdates(this).download(release) }
+            runOnUiThread {
+                updateBusy = false
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                result.fold({ installUpdate() }, ::showUpdateError)
+            }
+        }
+    }
+
+    private fun installUpdate() {
+        try {
+            AppUpdates(this).verify(java.io.File(cacheDir, "update.apk"))
+            if (!packageManager.canRequestPackageInstalls()) {
+                AlertDialog.Builder(this).setTitle("Allow ArrPilot updates")
+                    .setMessage("Enable installation from ArrPilot on the next screen, then return here to continue.")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Open settings") { _, _ ->
+                        try {
+                            startActivityForResult(Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                Uri.parse("package:$packageName")), 9401)
+                        } catch (error: Exception) { showUpdateError(error) }
+                    }.show()
+                return
+            }
+            val uri = Uri.parse("content://$packageName.updates/update.apk")
+            startActivity(Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                clipData = android.content.ClipData.newRawUri("ArrPilot update", uri)
+            })
+        } catch (error: Exception) { showUpdateError(error) }
+    }
+
+    @Deprecated("Retained for installation permission flow on Android TV")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == 9401) {
+            if (packageManager.canRequestPackageInstalls()) installUpdate()
+            else toast("Installation permission was not enabled. You can retry from Settings.")
+        }
+    }
+
+    private fun showUpdateError(error: Throwable) {
+        if (!isFinishing && !isDestroyed) AlertDialog.Builder(this).setTitle("Could not update ArrPilot")
+            .setMessage(error.message ?: "Please try again later.").setPositiveButton("Close", null).show()
     }
 
     private fun showAbout() {

@@ -20,6 +20,7 @@ ArrPilot communicates directly from the Android TV device with:
 - The user-configured Radarr server
 - TMDB when discovery features, metadata, or artwork are requested
 - YouTube TV when the user explicitly chooses to open a trailer
+- GitHub to check for a newer public ArrPilot release (at most once per six hours on launch, or when requested in Settings), and to download an APK after approval. These requests do not include Radarr or TMDB credentials.
 
 No credentials or usage information are sent to an ArrPilot-operated server.
 
