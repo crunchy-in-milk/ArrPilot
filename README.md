@@ -8,7 +8,7 @@ ArrPilot is an independent, unofficial project. It is not affiliated with or end
 
 - Search Radarr's movie lookup service with title-aware relevance ranking
 - Browse trending, popular, theatrical, upcoming, and custom TMDB discovery results
-- Discover collections, recommendations, hidden gems, cult movies, genres, and multiple decades
+- Discover collections, recommendations, genres, multiple decades, release windows, rating thresholds, and more
 - Add movies to Radarr as monitored or unmonitored with a chosen quality profile and root folder
 - Preview Radarr releases without permanently keeping the movie in the library
 - Review release date, quality, size, indexer, seeders, custom-format score, and rejection reasons

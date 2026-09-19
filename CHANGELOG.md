@@ -6,6 +6,19 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-19
+
+### Changed
+
+- Custom discovery now offers an unlimited result option while continuing to load TMDB pages only as you browse
+- Removed the hard-coded discovery styles so Custom results are determined solely by the filters you choose
+- Made Radarr options available for every movie that is not already in Radarr
+- Simplified the Settings and Profile controls
+
+### Fixed
+
+- Prevented malformed TMDB metadata for one optional detail section from blocking a movie's full detail view
+
 
 ## [0.1.0] - 2026-09-16
 

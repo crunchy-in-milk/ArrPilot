@@ -9,7 +9,6 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.time.LocalDate
-import java.util.Random
 
 class TmdbClient(
     context: Context,
@@ -52,11 +51,7 @@ class TmdbClient(
         val pages = attempts.mapNotNull { it.getOrNull() }
         if (pages.isEmpty()) throw attempts.firstNotNullOf { it.exceptionOrNull() }
         val movies = pages.flatMap { it.movies }.distinctBy { it.raw.optInt("tmdbId") }
-        val ordered = sortDiscovered(movies, filter.sort)
-        val displayed = if (filter.style.rotatesDaily) {
-            ordered.shuffled(Random(stableSeed(filter, today, page, null, null)))
-        } else ordered
-        return TmdbPage(displayed, page, pages.maxOfOrNull { it.totalPages } ?: page)
+        return TmdbPage(sortDiscovered(movies, filter.sort), page, pages.maxOfOrNull { it.totalPages } ?: page)
     }
 
     private fun discoverRange(filter: CustomDiscoverFilter, page: Int, startDate: LocalDate?, endDate: LocalDate?): TmdbPage {
@@ -70,9 +65,6 @@ class TmdbClient(
         if (filter.minimumVotes > 0) parameters["vote_count.gte"] = filter.minimumVotes.toString()
         if (filter.maximumVotes > 0) parameters["vote_count.lte"] = filter.maximumVotes.toString()
         if (filter.minimumRating > 0) parameters["vote_average.gte"] = filter.minimumRating.toString()
-        if (filter.style == DiscoveryStyle.CULT_CLASSICS) {
-            cultKeywordIds().takeIf(String::isNotBlank)?.let { parameters["with_keywords"] = it }
-        }
         startDate?.let { parameters["primary_release_date.gte"] = it.toString() }
         endDate?.let { parameters["primary_release_date.lte"] = it.toString() }
         fun load(sourcePage: Int): TmdbPage {
@@ -82,38 +74,8 @@ class TmdbClient(
             }
             return parsePage(JSONObject(request("discover/movie?$query", 4 * 60 * 60 * 1000L)))
         }
-        if (!filter.style.rotatesDaily) return load(page)
-        val first = load(1)
-        val availablePages = first.totalPages.coerceIn(1, 20)
-        val pageOrder = (1..availablePages).shuffled(Random(stableSeed(filter, LocalDate.now(), 0, startDate, endDate)))
-        val sourcePage = pageOrder[(page - 1).mod(availablePages)]
-        val selected = if (sourcePage == 1) first else load(sourcePage)
-        return selected.copy(page = page, totalPages = availablePages)
+        return load(page)
     }
-
-    private fun cultKeywordIds(): String {
-        val names = listOf("cult film", "b movie", "midnight movie")
-        return names.mapNotNull { name ->
-            val encoded = URLEncoder.encode(name, Charsets.UTF_8.name())
-            val results = JSONObject(request("search/keyword?query=$encoded&page=1", 7 * 24 * 60 * 60 * 1000L))
-                .optJSONArray("results") ?: JSONArray()
-            (0 until results.length()).mapNotNull { results.optJSONObject(it) }
-                .firstOrNull { it.optString("name").equals(name, ignoreCase = true) }
-                ?.optInt("id", 0)?.takeIf { it > 0 }
-        }.distinct().joinToString("|")
-    }
-
-    private fun stableSeed(
-        filter: CustomDiscoverFilter,
-        day: LocalDate,
-        page: Int,
-        startDate: LocalDate?,
-        endDate: LocalDate?
-    ): Long = listOf(
-        day.toEpochDay(), filter.style.name, filter.genreIds.sorted().joinToString(","),
-        filter.sort.name, filter.releaseWindow.name, filter.periods.map { it.name }.sorted().joinToString(","),
-        filter.minimumVotes, filter.maximumVotes, filter.minimumRating, page, startDate, endDate
-    ).joinToString("|").hashCode().toLong()
 
     private fun periodRanges(periods: Set<DiscoverPeriod>, today: LocalDate): List<Pair<LocalDate, LocalDate>> {
         val ranges = periods.map { period ->
@@ -145,11 +107,11 @@ class TmdbClient(
     }
 
     fun details(tmdbId: Int): TmdbMovieDetails {
-        val root = JSONObject(request(
-            "movie/$tmdbId?language=en-US&append_to_response=videos,release_dates,recommendations,similar",
-            24 * 60 * 60 * 1000L
-        ))
-        val videos = root.optJSONObject("videos")?.optJSONArray("results") ?: JSONArray()
+        // TMDB occasionally returns a server error for an expanded request when one
+        // optional relationship contains badly encoded metadata. Keep the core movie
+        // request independent so the Radarr workflow remains usable in that case.
+        val root = JSONObject(request("movie/$tmdbId?language=en-US", 24 * 60 * 60 * 1000L))
+        val videos = optionalResults("movie/$tmdbId/videos?language=en-US")
         val trailerId = (0 until videos.length()).mapNotNull { videos.optJSONObject(it) }
             .filter { it.optString("site") == "YouTube" }
             .sortedByDescending {
@@ -159,13 +121,13 @@ class TmdbClient(
             }.firstOrNull()?.optString("key")?.takeIf { it.isNotBlank() }
         val collection = root.optJSONObject("belongs_to_collection")
         val genres = root.optJSONArray("genres") ?: JSONArray()
-        val recommendationsRoot = root.optJSONObject("recommendations")?.optJSONArray("results")
-            ?.takeIf { it.length() > 0 }
-            ?: root.optJSONObject("similar")?.optJSONArray("results") ?: JSONArray()
+        val recommendationsRoot = optionalResults("movie/$tmdbId/recommendations?language=en-US")
+            .takeIf { it.length() > 0 }
+            ?: optionalResults("movie/$tmdbId/similar?language=en-US")
         return TmdbMovieDetails(
             movie = movie(root),
             runtimeMinutes = root.optInt("runtime", 0),
-            certification = certification(root),
+            certification = certification(optionalObject("movie/$tmdbId/release_dates")),
             genres = (0 until genres.length()).mapNotNull { genres.optJSONObject(it)?.optString("name")?.takeIf(String::isNotBlank) },
             rating = root.optDouble("vote_average", 0.0),
             voteCount = root.optInt("vote_count", 0),
@@ -212,8 +174,17 @@ class TmdbClient(
         )
     }
 
-    private fun certification(root: JSONObject): String {
-        val countries = root.optJSONObject("release_dates")?.optJSONArray("results") ?: return ""
+    private fun optionalObject(path: String): JSONObject? = runCatching {
+        JSONObject(request(path, 24 * 60 * 60 * 1000L))
+    }.getOrNull()
+
+    private fun optionalResults(path: String): JSONArray = optionalObject(path)?.optJSONArray("results") ?: JSONArray()
+
+    private fun certification(root: JSONObject?): String {
+        if (root == null) return ""
+        val countries = root.optJSONArray("results")
+            ?: root.optJSONObject("release_dates")?.optJSONArray("results")
+            ?: return ""
         for (i in 0 until countries.length()) {
             val country = countries.optJSONObject(i) ?: continue
             if (country.optString("iso_3166_1") != "US") continue

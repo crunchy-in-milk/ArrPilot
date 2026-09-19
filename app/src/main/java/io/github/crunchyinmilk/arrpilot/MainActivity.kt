@@ -197,7 +197,7 @@ class MainActivity : Activity() {
                 typeface = android.graphics.Typeface.DEFAULT_BOLD
                 setTextColor(Dracula.Foreground)
             })
-            addView(infoText("Enter the credentials ArrPilot should use. They are encrypted in this device's private app storage and are never compiled into the APK."))
+            addView(infoText("Enter the credentials ArrPilot should use."))
         }
         if (!connectionError.isNullOrBlank()) {
             panel.addView(TextView(this).apply {
@@ -232,10 +232,6 @@ class MainActivity : Activity() {
             }
             visibilityButton.text = if (credentialsVisible) "Hide credentials" else "Show credentials"
         }
-        panel.addView(visibilityButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(40)).apply {
-            bottomMargin = dp(8)
-        })
-
         val actions = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.START or Gravity.CENTER_VERTICAL
@@ -270,6 +266,7 @@ class MainActivity : Activity() {
             }
         }
         save.nextFocusUpId = SETTINGS_TMDB_KEY_ID
+        actions.addView(visibilityButton)
         actions.addView(save)
         actions.addView(navButton("About") { showAbout() })
         actions.addView(navButton("Check for updates") { checkForUpdates(true) })
@@ -573,7 +570,6 @@ class MainActivity : Activity() {
             setPadding(dp(20), dp(4), dp(20), dp(4))
         }
         lateinit var genreButton: Button
-        lateinit var styleButton: Button
         lateinit var sortButton: Button
         lateinit var releaseButton: Button
         lateinit var periodButton: Button
@@ -582,16 +578,6 @@ class MainActivity : Activity() {
         lateinit var ratingButton: Button
         lateinit var resultsButton: Button
         lateinit var radarrButton: Button
-        styleButton = filterSettingButton("Discovery style", draft.style.label) {
-            chooseFilterOption("Discovery style", DiscoveryStyle.entries.map { it.label }, draft.style.ordinal) { which ->
-                draft = applyDiscoveryStyle(draft, DiscoveryStyle.entries[which])
-                styleButton.text = filterSettingText("Discovery style", draft.style.label)
-                sortButton.text = filterSettingText("Sort", draft.sort.label)
-                votesButton.text = filterSettingText("Minimum ratings", formatRatingCount(draft.minimumVotes))
-                maximumVotesButton.text = filterSettingText("Maximum ratings", formatRatingCount(draft.maximumVotes))
-                ratingButton.text = filterSettingText("Minimum score", formatMinimumScore(draft.minimumRating))
-            }
-        }
         genreButton = filterSettingButton("Genres", genresSummary(draft.genreIds)) {
             showGenrePicker(draft.genreIds) { ids ->
                 draft = draft.copy(genreIds = ids)
@@ -637,11 +623,14 @@ class MainActivity : Activity() {
                 ratingButton.text = filterSettingText("Minimum score", formatMinimumScore(draft.minimumRating))
             }
         }
-        val resultOptions = listOf(20, 40, 60)
-        resultsButton = filterSettingButton("Maximum results", draft.maximumResults.toString()) {
-            chooseFilterOption("Maximum results", resultOptions.map(Int::toString), resultOptions.indexOf(draft.maximumResults).coerceAtLeast(0)) { which ->
+        // Zero is persisted as an unlimited result count; results still arrive one
+        // TMDB page at a time as the user approaches the end of the grid.
+        val resultOptions = listOf(20, 40, 60, 0)
+        fun resultLimitLabel(value: Int) = if (value == 0) "No limit" else value.toString()
+        resultsButton = filterSettingButton("Maximum results", resultLimitLabel(draft.maximumResults)) {
+            chooseFilterOption("Maximum results", resultOptions.map(::resultLimitLabel), resultOptions.indexOf(draft.maximumResults).coerceAtLeast(0)) { which ->
                 draft = draft.copy(maximumResults = resultOptions[which])
-                resultsButton.text = filterSettingText("Maximum results", draft.maximumResults.toString())
+                resultsButton.text = filterSettingText("Maximum results", resultLimitLabel(draft.maximumResults))
             }
         }
         radarrButton = filterSettingButton("Movies in Radarr", if (draft.excludeInRadarr) "Hide" else "Include") {
@@ -651,7 +640,7 @@ class MainActivity : Activity() {
                 radarrButton.text = filterSettingText("Movies in Radarr", values[which])
             }
         }
-        listOf(styleButton, genreButton, sortButton, releaseButton, periodButton, votesButton, maximumVotesButton, ratingButton, resultsButton, radarrButton)
+        listOf(genreButton, sortButton, releaseButton, periodButton, votesButton, maximumVotesButton, ratingButton, resultsButton, radarrButton)
             .forEach { panel.addView(it, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply { bottomMargin = dp(2) }) }
         val scroll = ScrollView(this).apply { addView(panel) }
         val dialog = AlertDialog.Builder(this)
@@ -663,7 +652,7 @@ class MainActivity : Activity() {
         dialog.setOnShowListener {
             val screenWidth = resources.displayMetrics.widthPixels
             dialog.window?.setLayout((screenWidth * 0.68f).toInt(), ViewGroup.LayoutParams.WRAP_CONTENT)
-            styleButton.requestFocus()
+            genreButton.requestFocus()
         }
         dialog.show()
     }
@@ -687,21 +676,6 @@ class MainActivity : Activity() {
     private fun formatRatingCount(value: Int) = if (value == 0) "Any" else String.format(Locale.US, "%,d", value)
 
     private fun formatMinimumScore(value: Int) = if (value == 0) "Any" else "$value/10"
-
-    private fun applyDiscoveryStyle(filter: CustomDiscoverFilter, style: DiscoveryStyle) = when (style) {
-        DiscoveryStyle.STANDARD -> filter.copy(
-            style = style, sort = DiscoverSort.POPULARITY, minimumVotes = 100, maximumVotes = 0, minimumRating = 0
-        )
-        DiscoveryStyle.HIDDEN_GEMS -> filter.copy(
-            style = style, sort = DiscoverSort.RATING, minimumVotes = 25, maximumVotes = 2_000, minimumRating = 6
-        )
-        DiscoveryStyle.DEEP_CUTS -> filter.copy(
-            style = style, sort = DiscoverSort.RATING, minimumVotes = 10, maximumVotes = 500, minimumRating = 5
-        )
-        DiscoveryStyle.CULT_CLASSICS -> filter.copy(
-            style = style, sort = DiscoverSort.RATING, minimumVotes = 25, maximumVotes = 5_000, minimumRating = 5
-        )
-    }
 
     private fun chooseFilterOption(title: String, labels: List<String>, current: Int, selected: (Int) -> Unit) {
         AlertDialog.Builder(this).setTitle(title)
@@ -757,7 +731,8 @@ class MainActivity : Activity() {
     private fun loadCustomExplorePage(reset: Boolean) {
         val filter = customFilterActive ?: return
         if (exploreLoading && !reset) return
-        if (!reset && exploreMovies.size >= filter.maximumResults) return
+        val limitReached = filter.maximumResults > 0 && exploreMovies.size >= filter.maximumResults
+        if (!reset && limitReached) return
         val generation = if (reset) ++exploreGeneration else exploreGeneration
         val requestedPage = if (reset) 1 else explorePage + 1
         exploreLoading = true
@@ -775,7 +750,8 @@ class MainActivity : Activity() {
             if (generation != exploreGeneration || customFilterActive != filter) return@tmdbBackground
             val marked = page.movies.map(::markLibraryState)
             val eligible = marked.filter { !filter.excludeInRadarr || !it.inLibrary }
-            val remaining = (filter.maximumResults - if (reset) 0 else exploreMovies.size).coerceAtLeast(0)
+            val remaining = if (filter.maximumResults == 0) Int.MAX_VALUE
+            else (filter.maximumResults - if (reset) 0 else exploreMovies.size).coerceAtLeast(0)
             val additions = eligible.take(remaining)
             explorePage = page.page
             exploreTotalPages = page.totalPages
@@ -787,7 +763,8 @@ class MainActivity : Activity() {
                 if (reset) adapter.replace(exploreMovies) else adapter.append(additions)
                 updateStatus("${exploreMovies.size} custom results")
                 if (reset && exploreMovies.isNotEmpty()) findGrid()?.requestFocus()
-                if (additions.isEmpty() && explorePage < exploreTotalPages && exploreMovies.size < filter.maximumResults) {
+                val moreAllowed = filter.maximumResults == 0 || exploreMovies.size < filter.maximumResults
+                if (additions.isEmpty() && explorePage < exploreTotalPages && moreAllowed) {
                     loadCustomExplorePage(reset = false)
                 }
             }
@@ -809,7 +786,6 @@ class MainActivity : Activity() {
     }
 
     private fun customFilterSummary(filter: CustomDiscoverFilter): String = buildList {
-        if (filter.style != DiscoveryStyle.STANDARD) add(filter.style.label)
         add(if (filter.genreIds.isEmpty()) "All genres" else genresSummary(filter.genreIds))
         add(filter.sort.label)
         if (filter.releaseWindow != ReleaseWindow.ANY) add(filter.releaseWindow.label)
@@ -848,7 +824,7 @@ class MainActivity : Activity() {
             if (details.genres.isNotEmpty()) append("\n${details.genres.joinToString(" • ")}")
             append("\n\n${movie.overview}")
         }
-        val radarrLabel = if (!movie.inLibrary && movie.status == "upcoming") "Radarr options" else "View releases"
+        val radarrLabel = if (!movie.inLibrary) "Radarr options" else "View releases"
         val actionRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.END or Gravity.CENTER_VERTICAL
@@ -889,7 +865,7 @@ class MainActivity : Activity() {
         actionRow.addView(dialogActionButton("Close") { dialog.dismiss() })
         val radarrButton = dialogActionButton(radarrLabel) {
             dialog.dismiss()
-            if (!movie.inLibrary && movie.status == "upcoming") showUpcomingRadarrOptions(movie)
+            if (!movie.inLibrary) showRadarrOptions(movie)
             else viewTmdbReleases(movie)
         }
         actionRow.addView(radarrButton)
@@ -913,7 +889,7 @@ class MainActivity : Activity() {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(52))
         }
 
-    private fun showUpcomingRadarrOptions(movie: Movie) {
+    private fun showRadarrOptions(movie: Movie) {
         val actions = arrayOf(
             "Preview available releases",
             "Add monitored",
@@ -1011,7 +987,7 @@ class MainActivity : Activity() {
             .setMessage(text)
             .setNegativeButton("Close", null)
         if (!movie.inLibrary) {
-            dialog.setPositiveButton("View releases") { _, _ -> addForInteractiveSearch(movie) }
+            dialog.setPositiveButton("Radarr options") { _, _ -> showRadarrOptions(movie) }
         } else {
             dialog.setPositiveButton("Search releases") { _, _ -> loadReleases(movie) }
         }
@@ -1169,7 +1145,6 @@ class MainActivity : Activity() {
             dialog.dismiss()
             chooseRoot(after)
         }.setNegativeButton("Cancel", null)
-            .setNeutralButton("About") { _, _ -> showAbout() }
             .setOnDismissListener { updateActiveNav() }
             .show()
     }
@@ -1391,7 +1366,6 @@ class MainActivity : Activity() {
         val genreIds = prefs.getString(CUSTOM_GENRES_KEY, "").orEmpty().split(',')
             .mapNotNull(String::toIntOrNull).toSet()
         return CustomDiscoverFilter(
-            style = runCatching { DiscoveryStyle.valueOf(prefs.getString(CUSTOM_STYLE_KEY, null).orEmpty()) }.getOrDefault(DiscoveryStyle.STANDARD),
             genreIds = genreIds,
             sort = runCatching { DiscoverSort.valueOf(prefs.getString(CUSTOM_SORT_KEY, null).orEmpty()) }.getOrDefault(DiscoverSort.POPULARITY),
             releaseWindow = runCatching { ReleaseWindow.valueOf(prefs.getString(CUSTOM_RELEASE_KEY, null).orEmpty()) }.getOrDefault(ReleaseWindow.ANY),
@@ -1407,7 +1381,6 @@ class MainActivity : Activity() {
 
     private fun saveCustomFilter(filter: CustomDiscoverFilter) {
         getPreferences(MODE_PRIVATE).edit()
-            .putString(CUSTOM_STYLE_KEY, filter.style.name)
             .putString(CUSTOM_GENRES_KEY, filter.genreIds.sorted().joinToString(","))
             .putString(CUSTOM_SORT_KEY, filter.sort.name)
             .putString(CUSTOM_RELEASE_KEY, filter.releaseWindow.name)
@@ -1567,7 +1540,6 @@ class MainActivity : Activity() {
         const val PREVIEW_ID_KEY = "temporary_preview_movie_id"
         const val PREVIEW_TMDB_KEY = "temporary_preview_tmdb_id"
         const val CUSTOM_GENRES_KEY = "custom_discover_genres"
-        const val CUSTOM_STYLE_KEY = "custom_discover_style"
         const val CUSTOM_SORT_KEY = "custom_discover_sort"
         const val CUSTOM_RELEASE_KEY = "custom_discover_release"
         const val CUSTOM_PERIOD_KEY = "custom_discover_period"

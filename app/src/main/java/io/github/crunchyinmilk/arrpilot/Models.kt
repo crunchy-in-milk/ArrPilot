@@ -75,13 +75,6 @@ enum class DiscoverSort(val label: String, val apiValue: String) {
     OLDEST("Oldest", "primary_release_date.asc")
 }
 
-enum class DiscoveryStyle(val label: String, val rotatesDaily: Boolean) {
-    STANDARD("Standard", false),
-    HIDDEN_GEMS("Hidden gems", true),
-    DEEP_CUTS("Deep cuts", true),
-    CULT_CLASSICS("Cult classics", true)
-}
-
 enum class ReleaseWindow(val label: String) {
     ANY("Any release status"),
     RELEASED("Released"),
@@ -103,7 +96,6 @@ enum class DiscoverPeriod(val label: String, val startYear: Int?, val endYear: I
 }
 
 data class CustomDiscoverFilter(
-    val style: DiscoveryStyle = DiscoveryStyle.STANDARD,
     val genreIds: Set<Int> = emptySet(),
     val sort: DiscoverSort = DiscoverSort.POPULARITY,
     val releaseWindow: ReleaseWindow = ReleaseWindow.ANY,
