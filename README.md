@@ -39,7 +39,7 @@ HTTPS is strongly recommended whenever Radarr is reachable outside a trusted hom
 
 ## Updates and installation
 
-Download `ArrPilot-0.1.0.apk` from [GitHub Releases](https://github.com/crunchy-in-milk/ArrPilot/releases). Transfer it to the TV and open it with an APK installer, or use `adb install -r ArrPilot-0.1.0.apk` from a connected computer.
+Download `ArrPilot-0.2.0.apk` from [GitHub Releases](https://github.com/crunchy-in-milk/ArrPilot/releases). Transfer it to the TV and open it with an APK installer, or use `adb install -r ArrPilot-0.2.0.apk` from a connected computer.
 
 ArrPilot checks the latest stable GitHub release on launch, at most once every six hours. **Settings → Check for updates** always checks immediately. Downloads begin only after you choose **Download**. The app verifies the APK package, version code, and signing certificate before opening Android's installation confirmation. Android may require a one-time permission to install from ArrPilot. Settings are retained during updates.
 
