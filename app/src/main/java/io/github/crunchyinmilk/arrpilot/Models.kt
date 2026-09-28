@@ -51,7 +51,12 @@ enum class ExploreCategory(val label: String, val description: String) {
     UPCOMING("Upcoming", "Upcoming US theatrical releases")
 }
 
-data class TmdbPage(val movies: List<Movie>, val page: Int, val totalPages: Int)
+data class TmdbPage(
+    val movies: List<Movie>,
+    val page: Int,
+    val totalPages: Int,
+    val totalResults: Int
+)
 
 data class TmdbMovieDetails(
     val movie: Movie,
@@ -63,7 +68,15 @@ data class TmdbMovieDetails(
     val trailerId: String?,
     val collectionId: Int?,
     val collectionName: String?,
-    val recommendations: List<Movie>
+    val recommendations: List<Movie>,
+    val cast: List<CastMember>
+)
+
+data class CastMember(
+    val tmdbId: Int,
+    val name: String,
+    val character: String,
+    val profileUrl: String?
 )
 
 data class LibraryState(val downloaded: Boolean)
@@ -104,5 +117,6 @@ data class CustomDiscoverFilter(
     val maximumVotes: Int = 0,
     val minimumRating: Int = 0,
     val maximumResults: Int = 40,
-    val excludeInRadarr: Boolean = false
+    val excludeInRadarr: Boolean = false,
+    val excludeLikelyShortFilms: Boolean = false
 )

@@ -30,6 +30,7 @@ class MainActivity : Activity() {
     private lateinit var client: RadarrClient
     private lateinit var tmdb: TmdbClient
     private lateinit var adapter: MovieAdapter
+    private lateinit var castAdapter: CastAdapter
     private lateinit var releaseAdapter: ReleaseAdapter
     private lateinit var content: LinearLayout
     private lateinit var status: TextView
@@ -49,12 +50,18 @@ class MainActivity : Activity() {
     private var connected = false
     private var currentScreen = Screen.SEARCH
     private var searchHasResults = false
+    private var searchMovies = emptyList<Movie>()
+    private var searchTerm = ""
+    private var pendingMovieFocusTmdbId: Int? = null
+    private var pendingCastFocusTmdbId: Int? = null
     private var temporaryMovie: Movie? = null
     private var previewCommitInProgress = false
     private var releaseReturnScreen = Screen.SEARCH
     private var exploreCategory = ExploreCategory.TRENDING
     private var explorePage = 0
     private var exploreTotalPages = 1
+    private var exploreTotalResults = 0
+    private var exploreUsesPagination = true
     private var exploreLoading = false
     private var exploreGeneration = 0
     private var exploreTitle = ExploreCategory.TRENDING.label
@@ -62,6 +69,13 @@ class MainActivity : Activity() {
     private var explorePrevious: ExploreSnapshot? = null
     private var customFilterActive: CustomDiscoverFilter? = null
     private var customDraft = CustomDiscoverFilter()
+    private var detailReturnScreen = Screen.SEARCH
+    private var activeMovieDetails: TmdbMovieDetails? = null
+    private var activePerson: CastMember? = null
+    private var personOriginDetails: TmdbMovieDetails? = null
+    private var personParentScreen = Screen.SEARCH
+    private var personMovies = emptyList<Movie>()
+    private var personLoadedCount = 0
     private val libraryStates = ConcurrentHashMap<Int, LibraryState>()
     private var libraryStatesLoaded = false
     private var updateBusy = false
@@ -81,33 +95,34 @@ class MainActivity : Activity() {
     private fun buildShell() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(36), dp(18), dp(36), dp(8))
-            setBackgroundColor(Dracula.Background)
+            setPadding(dp(44), dp(16), dp(44), dp(12))
+            setBackgroundResource(R.drawable.app_background)
         }
 
         val header = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
         val brand = TextView(this).apply {
-            text = "ARR PILOT"
-            textSize = 22f
+            text = "ARRPILOT"
+            textSize = 18f
             setTextColor(Dracula.Pink)
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            letterSpacing = 0.08f
         }
         header.addView(brand)
 
         val nav = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(28), 0, 0, 0)
+            setPadding(dp(34), 0, 0, 0)
         }
-        searchNav = navButton("Search") { navigateConfigured { leaveReleasePreview(::showSearch) } }
-        exploreNav = navButton("Explore") { navigateConfigured { leaveReleasePreview(::showExplore) } }
-        queueNav = navButton("Queue") { navigateConfigured { leaveReleasePreview(::loadQueue) } }
-        profileNav = navButton("Profile") {
-            if (!appSettings.isComplete) return@navButton showSettings()
+        searchNav = topNavButton("Search", R.drawable.ic_search) { navigateConfigured { leaveReleasePreview(::showSearch) } }
+        exploreNav = topNavButton("Explore", R.drawable.ic_explore) { navigateConfigured { leaveReleasePreview(::showExplore) } }
+        queueNav = topNavButton("Queue", R.drawable.ic_queue) { navigateConfigured { leaveReleasePreview(::loadQueue) } }
+        profileNav = topNavButton("Profile", R.drawable.ic_profile) {
+            if (!appSettings.isComplete) return@topNavButton showSettings()
             setActiveNav(profileNav)
             chooseProfile()
         }
-        settingsNav = navButton("Settings") { leaveReleasePreview(::showSettings) }
+        settingsNav = topNavButton("Settings", R.drawable.ic_settings) { leaveReleasePreview(::showSettings) }
         searchNav.id = SEARCH_NAV_ID
         exploreNav.id = EXPLORE_NAV_ID
         queueNav.id = QUEUE_NAV_ID
@@ -126,24 +141,30 @@ class MainActivity : Activity() {
         header.addView(nav)
 
         heading = TextView(this).apply {
-            textSize = 15f
-            setTextColor(Dracula.Foreground)
-            setPadding(dp(20), 0, 0, 0)
-            visibility = View.GONE
-        }
-        header.addView(heading)
-        header.addView(Space(this), LinearLayout.LayoutParams(0, 1, 1f))
-        status = TextView(this).apply {
-            text = "Connecting…"
             textSize = 13f
             setTextColor(Dracula.Comment)
+            setPadding(dp(26), 0, 0, 0)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = View.GONE
+        }
+        header.addView(heading, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+        status = TextView(this).apply {
+            text = "Connecting…"
+            textSize = 12f
+            setTextColor(Dracula.Comment)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setPadding(dp(16), 0, 0, 0)
+            gravity = Gravity.CENTER_VERTICAL
         }
         header.addView(status)
-        root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)))
+        root.addView(header, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(52)))
 
         content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(10), 0, 0)
+            setPadding(0, dp(14), 0, 0)
         }
         root.addView(content, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
@@ -154,6 +175,7 @@ class MainActivity : Activity() {
         client = RadarrClient(settings.radarrUrl, settings.radarrApiKey)
         tmdb = TmdbClient(this, settings.tmdbReadToken, settings.tmdbApiKey)
         adapter = MovieAdapter(this, client, imageExecutor)
+        castAdapter = CastAdapter(this, client, imageExecutor)
         updateStatus("Testing connections…")
         networkExecutor.execute {
             try {
@@ -316,10 +338,18 @@ class MainActivity : Activity() {
         else showSettings()
     }
 
-    private fun showSearch() {
+    private fun showSearch(preserveResults: Boolean = false) {
         currentScreen = Screen.SEARCH
-        searchHasResults = false
-        adapter.replace(emptyList())
+        if (!preserveResults) {
+            searchHasResults = false
+            searchMovies = emptyList()
+            searchTerm = ""
+            pendingMovieFocusTmdbId = null
+            adapter.replace(emptyList())
+        } else {
+            searchHasResults = searchMovies.isNotEmpty()
+            adapter.replace(searchMovies)
+        }
         heading.visibility = View.GONE
         setActiveNav(searchNav)
         updateStatus(if (radarrVersion.isBlank()) "Ready" else "Radarr $radarrVersion")
@@ -339,6 +369,7 @@ class MainActivity : Activity() {
             nextFocusUpId = SEARCH_NAV_ID
             nextFocusDownId = GRID_ID
         }
+        if (preserveResults) input.setText(searchTerm)
         input.setOnEditorActionListener { _, action, event ->
             if (action == EditorInfo.IME_ACTION_SEARCH || event?.keyCode == KeyEvent.KEYCODE_ENTER) {
                 runSearch(input.text.toString()); true
@@ -366,8 +397,10 @@ class MainActivity : Activity() {
             setPadding(0, dp(12), 0, dp(4))
         }
         content.addView(section)
-        content.addView(movieGrid(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        input.requestFocus()
+        val grid = movieGrid()
+        content.addView(grid, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        restoreMovieGridFocus(grid)
+        if (pendingMovieFocusTmdbId == null) input.requestFocus()
     }
 
     private fun runSearch(term: String) {
@@ -379,6 +412,8 @@ class MainActivity : Activity() {
         }
         updateStatus("Searching…")
         background({ client.search(term) }, { movies ->
+            searchTerm = term
+            searchMovies = movies
             adapter.replace(movies)
             searchHasResults = movies.isNotEmpty()
             updateStatus("${movies.size} results")
@@ -424,7 +459,11 @@ class MainActivity : Activity() {
         setPadding(0, 0, 0, 0)
         selector = android.graphics.drawable.ColorDrawable(Color.TRANSPARENT)
         adapter = this@MainActivity.adapter
-        setOnItemClickListener { _, _, position, _ -> onMovieClick(this@MainActivity.adapter.getItem(position)) }
+        setOnItemClickListener { _, _, position, _ ->
+            val movie = this@MainActivity.adapter.getItem(position)
+            pendingMovieFocusTmdbId = movie.raw.optInt("tmdbId", 0).takeIf { it > 0 }
+            onMovieClick(movie)
+        }
         if (onNearEnd != null) {
             setOnScrollListener(object : AbsListView.OnScrollListener {
                 override fun onScrollStateChanged(view: AbsListView?, scrollState: Int) = Unit
@@ -448,6 +487,30 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun restoreMovieGridFocus(grid: GridView) {
+        val tmdbId = pendingMovieFocusTmdbId ?: return
+        grid.post {
+            val position = (0 until adapter.count).firstOrNull { index ->
+                adapter.getItem(index).raw.optInt("tmdbId", 0) == tmdbId
+            } ?: return@post
+            grid.setSelection(position)
+            grid.requestFocus()
+            pendingMovieFocusTmdbId = null
+        }
+    }
+
+    private fun restoreCastGridFocus(grid: GridView) {
+        val tmdbId = pendingCastFocusTmdbId ?: return
+        grid.post {
+            val position = (0 until castAdapter.count).firstOrNull { index ->
+                castAdapter.getItem(index).tmdbId == tmdbId
+            } ?: return@post
+            grid.setSelection(position)
+            grid.requestFocus()
+            pendingCastFocusTmdbId = null
+        }
+    }
+
     private fun showExplore() {
         currentScreen = Screen.EXPLORE
         heading.visibility = View.GONE
@@ -456,7 +519,7 @@ class MainActivity : Activity() {
         if (exploreMovies.isEmpty()) {
             if (customFilterActive != null) loadCustomExplorePage(reset = true) else loadExplorePage(reset = true)
         }
-        else updateStatus("${exploreMovies.size} movies")
+        else updateExploreStatus()
     }
 
     private fun renderExplore() {
@@ -472,6 +535,7 @@ class MainActivity : Activity() {
         ExploreCategory.entries.forEachIndexed { index, category ->
             categoryRow.addView(navButton(category.label) {
                 if (exploreCategory != category || explorePrevious != null || customFilterActive != null) {
+                    pendingMovieFocusTmdbId = null
                     exploreCategory = category
                     exploreTitle = category.label
                     explorePrevious = null
@@ -520,11 +584,13 @@ class MainActivity : Activity() {
         }
         content.addView(section)
         adapter.replace(exploreMovies)
-        content.addView(movieGrid(::showTmdbMovie) {
+        val grid = movieGrid(::showTmdbMovie) {
             if (explorePrevious == null && explorePage < exploreTotalPages) {
                 if (customFilterActive != null) loadCustomExplorePage(reset = false) else loadExplorePage(reset = false)
             }
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        }
+        content.addView(grid, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        restoreMovieGridFocus(grid)
     }
 
     private fun loadExplorePage(reset: Boolean) {
@@ -535,6 +601,8 @@ class MainActivity : Activity() {
         exploreLoading = true
         if (reset) {
             exploreMovies = emptyList()
+            exploreTotalResults = 0
+            exploreUsesPagination = true
             adapter.replace(emptyList())
             updateStatus("Loading ${category.label.lowercase()}…")
         } else updateStatus("Loading more…")
@@ -549,13 +617,14 @@ class MainActivity : Activity() {
             val marked = page.movies.map(::markLibraryState)
             explorePage = page.page
             exploreTotalPages = page.totalPages
+            exploreTotalResults = page.totalResults
             exploreMovies = if (reset) marked else exploreMovies + marked.filter { candidate ->
                 exploreMovies.none { it.raw.optInt("tmdbId") == candidate.raw.optInt("tmdbId") }
             }
             exploreLoading = false
             if (currentScreen == Screen.EXPLORE) {
                 if (reset) adapter.replace(exploreMovies) else adapter.append(marked)
-                updateStatus("${exploreMovies.size} movies")
+                updateExploreStatus()
                 if (reset && marked.isNotEmpty()) findGrid()?.requestFocus()
             }
         }, {
@@ -578,6 +647,7 @@ class MainActivity : Activity() {
         lateinit var ratingButton: Button
         lateinit var resultsButton: Button
         lateinit var radarrButton: Button
+        lateinit var likelyShortFilmsButton: Button
         genreButton = filterSettingButton("Genres", genresSummary(draft.genreIds)) {
             showGenrePicker(draft.genreIds) { ids ->
                 draft = draft.copy(genreIds = ids)
@@ -640,13 +710,21 @@ class MainActivity : Activity() {
                 radarrButton.text = filterSettingText("Movies in Radarr", values[which])
             }
         }
-        listOf(genreButton, sortButton, releaseButton, periodButton, votesButton, maximumVotesButton, ratingButton, resultsButton, radarrButton)
+        likelyShortFilmsButton = filterSettingButton("Likely short films", if (draft.excludeLikelyShortFilms) "Exclude" else "Include") {
+            val values = listOf("Include", "Exclude")
+            chooseFilterOption("Likely short films", values, if (draft.excludeLikelyShortFilms) 1 else 0) { which ->
+                draft = draft.copy(excludeLikelyShortFilms = which == 1)
+                likelyShortFilmsButton.text = filterSettingText("Likely short films", values[which])
+            }
+        }
+        listOf(genreButton, sortButton, releaseButton, periodButton, votesButton, maximumVotesButton, ratingButton, resultsButton, radarrButton, likelyShortFilmsButton)
             .forEach { panel.addView(it, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply { bottomMargin = dp(2) }) }
         val scroll = ScrollView(this).apply { addView(panel) }
         val dialog = AlertDialog.Builder(this)
             .setTitle("Custom discovery")
             .setView(scroll)
             .setNegativeButton("Cancel", null)
+            .setNeutralButton("Clear filters") { _, _ -> applyCustomFilter(CustomDiscoverFilter()) }
             .setPositiveButton("Show movies") { _, _ -> applyCustomFilter(draft) }
             .create()
         dialog.setOnShowListener {
@@ -716,6 +794,7 @@ class MainActivity : Activity() {
     }
 
     private fun applyCustomFilter(filter: CustomDiscoverFilter) {
+        pendingMovieFocusTmdbId = null
         customDraft = filter
         saveCustomFilter(filter)
         customFilterActive = filter
@@ -723,6 +802,8 @@ class MainActivity : Activity() {
         exploreTitle = "Custom"
         explorePage = 0
         exploreTotalPages = 1
+        exploreTotalResults = 0
+        exploreUsesPagination = true
         exploreMovies = emptyList()
         renderExplore()
         loadCustomExplorePage(reset = true)
@@ -737,6 +818,8 @@ class MainActivity : Activity() {
         val requestedPage = if (reset) 1 else explorePage + 1
         exploreLoading = true
         if (reset) {
+            exploreTotalResults = 0
+            exploreUsesPagination = true
             adapter.replace(emptyList())
             updateStatus("Building custom results…")
         } else updateStatus("Loading more…")
@@ -745,7 +828,15 @@ class MainActivity : Activity() {
                 runCatching { client.libraryStates() }.onSuccess { libraryStates.putAll(it) }
                 libraryStatesLoaded = true
             }
-            tmdb.discover(filter, requestedPage)
+            val page = tmdb.discover(filter, requestedPage)
+            if (!filter.excludeLikelyShortFilms) page else page.copy(
+                movies = page.movies.filter { movie ->
+                    // Keep unknown runtimes. A lookup failure is treated the same way
+                    // so an intermittent TMDB error never silently hides a title.
+                    val runtime = runCatching { tmdb.runtimeMinutes(movie.raw.optInt("tmdbId", 0)) }.getOrDefault(0)
+                    runtime == 0 || runtime >= 20
+                }
+            )
         }, { page ->
             if (generation != exploreGeneration || customFilterActive != filter) return@tmdbBackground
             val marked = page.movies.map(::markLibraryState)
@@ -755,13 +846,14 @@ class MainActivity : Activity() {
             val additions = eligible.take(remaining)
             explorePage = page.page
             exploreTotalPages = page.totalPages
+            exploreTotalResults = page.totalResults
             exploreMovies = if (reset) additions else exploreMovies + additions.filter { candidate ->
                 exploreMovies.none { it.raw.optInt("tmdbId") == candidate.raw.optInt("tmdbId") }
             }
             exploreLoading = false
             if (currentScreen == Screen.EXPLORE && customFilterActive == filter) {
                 if (reset) adapter.replace(exploreMovies) else adapter.append(additions)
-                updateStatus("${exploreMovies.size} custom results")
+                updateExploreStatus()
                 if (reset && exploreMovies.isNotEmpty()) findGrid()?.requestFocus()
                 val moreAllowed = filter.maximumResults == 0 || exploreMovies.size < filter.maximumResults
                 if (additions.isEmpty() && explorePage < exploreTotalPages && moreAllowed) {
@@ -794,6 +886,7 @@ class MainActivity : Activity() {
         if (filter.maximumVotes > 0) add("under ${String.format(Locale.US, "%,d", filter.maximumVotes)} ratings")
         if (filter.minimumRating > 0) add("${filter.minimumRating}+/10")
         if (filter.excludeInRadarr) add("Hiding Radarr movies")
+        if (filter.excludeLikelyShortFilms) add("Hiding likely short films")
     }.joinToString(" • ")
 
     private fun markLibraryState(movie: Movie): Movie {
@@ -801,16 +894,32 @@ class MainActivity : Activity() {
         return movie.copy(inLibrary = true, downloaded = state.downloaded)
     }
 
-    private fun showTmdbMovie(movie: Movie) {
+    private fun updateExploreStatus() {
+        val loaded = exploreMovies.size
+        if (exploreUsesPagination && exploreTotalResults > 0) {
+            updateStatus("$loaded of ${exploreTotalResults.coerceAtLeast(loaded)} movies")
+        } else {
+            updateStatus("$loaded movies")
+        }
+    }
+
+    private fun showTmdbMovie(movie: Movie) = openMovieDetails(movie)
+
+    private fun openMovieDetails(movie: Movie) {
+        val sourceScreen = currentScreen
         updateStatus("Loading details…")
         tmdbBackground({ tmdb.details(movie.raw.optInt("tmdbId", 0)) }, { details ->
-            if (currentScreen != Screen.EXPLORE) return@tmdbBackground
-            updateStatus("${exploreMovies.size} movies")
-            showTmdbDetails(details.copy(movie = markLibraryState(details.movie)))
+            if (currentScreen != sourceScreen) return@tmdbBackground
+            detailReturnScreen = sourceScreen
+            val marked = details.copy(movie = markLibraryState(details.movie))
+            // The overview already names the movie in its header and hero, so
+            // a repeated status wastes the limited header space.
+            updateStatus("")
+            showMovieDetails(marked)
         })
     }
 
-    private fun showTmdbDetails(details: TmdbMovieDetails) {
+    private fun showMovieDetails(details: TmdbMovieDetails) {
         val movie = details.movie
         val facts = buildList {
             movie.year.takeIf { it > 0 }?.let { add(it.toString()) }
@@ -819,75 +928,295 @@ class MainActivity : Activity() {
             if (details.rating > 0) add(String.format(Locale.US, "TMDB %.1f/10 (%,d)", details.rating, details.voteCount))
             if (movie.downloaded) add("Downloaded") else if (movie.inLibrary) add("In Radarr")
         }
-        val message = buildString {
-            append(facts.joinToString(" • "))
-            if (details.genres.isNotEmpty()) append("\n${details.genres.joinToString(" • ")}")
-            append("\n\n${movie.overview}")
+        currentScreen = Screen.MOVIE_DETAILS
+        activeMovieDetails = details
+        heading.text = "${movie.title}  ›  Details"
+        heading.visibility = View.VISIBLE
+        updateActiveNav()
+        content.removeAllViews()
+
+        val scroll = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+            clipToPadding = false
         }
-        val radarrLabel = if (!movie.inLibrary) "Radarr options" else "View releases"
-        val actionRow = LinearLayout(this).apply {
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, 0, 0, dp(12))
+        }
+        scroll.addView(panel, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        content.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+
+        val hero = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+            gravity = Gravity.TOP
+            setPadding(0, 0, 0, dp(14))
         }
-        val actionScroll = HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            isFillViewport = true
-            setPadding(dp(18), 0, dp(18), dp(8))
-            addView(actionRow, FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ))
+        val poster = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            setBackgroundColor(Dracula.BackgroundDarker)
         }
-        val dialog = AlertDialog.Builder(this)
-            .setTitle(movie.title)
-            .setMessage(message)
-            .setView(actionScroll)
-            .create()
+        val posterFrame = FrameLayout(this).apply {
+            background = getDrawable(R.drawable.poster_panel_full)
+            setPadding(dp(3), dp(3), dp(3), dp(3))
+            clipToOutline = true
+            addView(poster, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+        hero.addView(posterFrame, LinearLayout.LayoutParams(dp(148), dp(222)))
+        val copy = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(2), 0, 0)
+        }
+        copy.addView(TextView(this).apply {
+            text = movie.title
+            textSize = 30f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Dracula.Foreground)
+        })
+        if (facts.isNotEmpty()) copy.addView(TextView(this).apply {
+            text = facts.joinToString("  •  ")
+            textSize = 15f
+            setTextColor(Dracula.Comment)
+            setPadding(0, dp(4), 0, 0)
+        })
+        if (details.genres.isNotEmpty()) copy.addView(TextView(this).apply {
+            text = details.genres.joinToString("  •  ")
+            textSize = 14f
+            setTextColor(Dracula.Purple)
+            setPadding(0, dp(6), 0, 0)
+        })
+        copy.addView(TextView(this).apply {
+            text = movie.overview
+            textSize = 15f
+            setTextColor(Dracula.Foreground)
+            setLineSpacing(dp(2).toFloat(), 1f)
+            setPadding(0, dp(12), 0, 0)
+        })
+        hero.addView(copy, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        panel.addView(hero)
+        movie.posterUrl?.let { url ->
+            imageExecutor.execute {
+                val bitmap = runCatching { client.loadBitmap(url, dp(296), dp(444)) }.getOrNull()
+                if (bitmap != null) runOnUiThread {
+                    if (currentScreen == Screen.MOVIE_DETAILS && activeMovieDetails?.movie?.raw?.optInt("tmdbId") == movie.raw.optInt("tmdbId")) {
+                        poster.setImageBitmap(bitmap)
+                    }
+                }
+            }
+        }
+
+        val radarrLabel = if (!movie.inLibrary) "Radarr options" else "View releases"
+        val actions = mutableListOf<Button>()
+        if (details.cast.isNotEmpty()) {
+            actions += detailActionButton("Cast") { showCast(details) }
+        }
         details.trailerId?.let { trailerId ->
-            actionRow.addView(dialogActionButton("Trailer") {
-                dialog.dismiss()
-                openTrailer(trailerId)
-            })
+            actions += detailActionButton("Trailer") { openTrailer(trailerId) }
         }
         if (details.recommendations.isNotEmpty()) {
-            actionRow.addView(dialogActionButton("More like this") {
-                dialog.dismiss()
+            actions += detailActionButton("More like this") {
+                currentScreen = detailReturnScreen
                 showCustomExplore("More like ${details.movie.title}", details.recommendations)
-            })
+            }
         }
         details.collectionId?.let { collectionId ->
-            actionRow.addView(dialogActionButton("View collection") {
-                dialog.dismiss()
+            actions += detailActionButton("View collection") {
+                currentScreen = detailReturnScreen
                 loadCollection(collectionId)
-            })
+            }
         }
-        actionRow.addView(Space(this), LinearLayout.LayoutParams(0, 1, 1f))
-        actionRow.addView(dialogActionButton("Close") { dialog.dismiss() })
-        val radarrButton = dialogActionButton(radarrLabel) {
-            dialog.dismiss()
+        val radarrButton = detailActionButton(radarrLabel) {
             if (!movie.inLibrary) showRadarrOptions(movie)
             else viewTmdbReleases(movie)
         }
-        actionRow.addView(radarrButton)
-        dialog.setOnShowListener {
-            val screenWidth = resources.displayMetrics.widthPixels
-            val dialogWidth = (screenWidth * 0.88f).toInt().coerceAtMost(screenWidth - dp(48))
-            dialog.window?.setLayout(dialogWidth, ViewGroup.LayoutParams.WRAP_CONTENT)
-            radarrButton.requestFocus()
-        }
-        dialog.show()
+        actions += radarrButton
+        panel.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+            actions.forEach { addView(it) }
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(42)))
+        radarrButton.requestFocus()
     }
 
-    private fun dialogActionButton(label: String, action: () -> Unit) =
-        Button(this, null, android.R.attr.buttonBarButtonStyle).apply {
-            text = label
-            isAllCaps = true
-            minWidth = 0
-            minimumWidth = 0
-            setPadding(dp(14), 0, dp(14), 0)
-            setOnClickListener { action() }
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(52))
+    private fun detailActionButton(label: String, action: () -> Unit) = navButton(label, action).apply {
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38)).apply { rightMargin = dp(8) }
+    }
+
+    private fun showCast(details: TmdbMovieDetails) {
+        currentScreen = Screen.CAST
+        heading.text = "${details.movie.title}  ›  Cast"
+        heading.visibility = View.VISIBLE
+        updateActiveNav()
+        content.removeAllViews()
+        val facts = buildList {
+            details.movie.year.takeIf { it > 0 }?.let { add(it.toString()) }
+            details.runtimeMinutes.takeIf { it > 0 }?.let { add("${it / 60}h ${it % 60}m") }
+        }.joinToString(" • ")
+        val hero = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 0, 0, dp(12))
         }
+        val poster = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            setBackgroundColor(Dracula.BackgroundDarker)
+        }
+        val posterFrame = FrameLayout(this).apply {
+            background = getDrawable(R.drawable.poster_panel_full)
+            setPadding(dp(3), dp(3), dp(3), dp(3))
+            clipToOutline = true
+            addView(poster, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+        hero.addView(posterFrame, LinearLayout.LayoutParams(dp(96), dp(144)))
+        val copy = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(22), 0, 0, 0)
+        }
+        copy.addView(TextView(this).apply {
+            text = "Cast"
+            textSize = 30f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(Dracula.Foreground)
+        })
+        copy.addView(TextView(this).apply {
+            text = listOf(details.movie.title, facts).filter { it.isNotBlank() }.joinToString("  •  ")
+            textSize = 15f
+            setTextColor(Dracula.Comment)
+            setPadding(0, dp(3), 0, 0)
+        })
+        hero.addView(copy, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+        content.addView(hero)
+        details.movie.posterUrl?.let { url ->
+            imageExecutor.execute {
+                val bitmap = runCatching { client.loadBitmap(url, dp(192), dp(288)) }.getOrNull()
+                if (bitmap != null) runOnUiThread { poster.setImageBitmap(bitmap) }
+            }
+        }
+        castAdapter.replace(details.cast)
+        val grid = GridView(this).apply {
+            val gap = dp(16)
+            horizontalSpacing = gap
+            verticalSpacing = dp(12)
+            stretchMode = GridView.NO_STRETCH
+            clipToPadding = true
+            isVerticalScrollBarEnabled = false
+            selector = android.graphics.drawable.ColorDrawable(Color.TRANSPARENT)
+            // GridView needs an initial column geometry when its adapter is attached.
+            // The responsive dimensions below replace these after the first layout pass.
+            numColumns = 5
+            columnWidth = dp(140)
+            adapter = castAdapter
+            setOnItemClickListener { _, _, position, _ -> showPersonFilmography(castAdapter.getItem(position)) }
+            post {
+                // Cast cards are intentionally a little narrower than movie cards so
+                // the people read as a browse row instead of oversized portraits.
+                val columns = ((width + gap) / (dp(140) + gap)).coerceIn(3, 6)
+                numColumns = columns
+                columnWidth = ((width - gap * (columns - 1)) / columns).coerceAtLeast(dp(120))
+                castAdapter.setCardSize(columnWidth, dp(260))
+                invalidateViews()
+                requestLayout()
+                requestFocus()
+            }
+        }
+        content.addView(grid, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        restoreCastGridFocus(grid)
+        updateStatus("${details.cast.size} cast members")
+    }
+
+    private fun showPersonFilmography(person: CastMember) {
+        if (person.tmdbId <= 0) return toast("TMDB did not provide this person's profile")
+        pendingCastFocusTmdbId = person.tmdbId
+        val origin = activeMovieDetails ?: return
+        updateStatus("Loading ${person.name}'s movies…")
+        tmdbBackground({
+            if (!libraryStatesLoaded) {
+                runCatching { client.libraryStates() }.onSuccess { libraryStates.putAll(it) }
+                libraryStatesLoaded = true
+            }
+            tmdb.personMovieCredits(person.tmdbId)
+        }, { movies ->
+            if (currentScreen != Screen.CAST) return@tmdbBackground
+            activePerson = person
+            personOriginDetails = origin
+            personParentScreen = detailReturnScreen
+            personMovies = movies.map(::markLibraryState)
+            personLoadedCount = minOf(PERSON_PAGE_SIZE, personMovies.size)
+            renderPersonFilmography()
+        })
+    }
+
+    private fun renderPersonFilmography() {
+        val person = activePerson ?: return
+        currentScreen = Screen.PERSON
+        heading.text = "${person.name}  ›  Movies"
+        heading.visibility = View.VISIBLE
+        updateActiveNav()
+        content.removeAllViews()
+
+        val hero = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 0, 0, dp(12))
+        }
+        val portrait = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            setBackgroundColor(Dracula.BackgroundDarker)
+        }
+        val portraitFrame = FrameLayout(this).apply {
+            background = getDrawable(R.drawable.poster_panel_full)
+            setPadding(dp(3), dp(3), dp(3), dp(3))
+            clipToOutline = true
+            addView(portrait, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        }
+        hero.addView(portraitFrame, LinearLayout.LayoutParams(dp(96), dp(144)))
+        hero.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(22), 0, 0, 0)
+            addView(TextView(this@MainActivity).apply {
+                text = person.name
+                textSize = 30f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(Dracula.Foreground)
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = "Movie credits  •  Newest first"
+                textSize = 15f
+                setTextColor(Dracula.Comment)
+                setPadding(0, dp(3), 0, 0)
+            })
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f))
+        content.addView(hero)
+        person.profileUrl?.let { url ->
+            imageExecutor.execute {
+                val bitmap = runCatching { client.loadBitmap(url, dp(192), dp(288)) }.getOrNull()
+                if (bitmap != null) runOnUiThread {
+                    if (currentScreen == Screen.PERSON && activePerson?.tmdbId == person.tmdbId) portrait.setImageBitmap(bitmap)
+                }
+            }
+        }
+
+        adapter.replace(personMovies.take(personLoadedCount))
+        val grid = movieGrid(::openMovieDetails) { loadMorePersonMovies() }
+        content.addView(grid, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        updatePersonStatus()
+        restoreMovieGridFocus(grid)
+        if (pendingMovieFocusTmdbId == null) grid.post { if (personMovies.isNotEmpty()) grid.requestFocus() }
+    }
+
+    private fun loadMorePersonMovies() {
+        if (currentScreen != Screen.PERSON || personLoadedCount >= personMovies.size) return
+        val nextCount = minOf(personLoadedCount + PERSON_PAGE_SIZE, personMovies.size)
+        val additions = personMovies.subList(personLoadedCount, nextCount)
+        personLoadedCount = nextCount
+        adapter.append(additions)
+        updatePersonStatus()
+    }
+
+    private fun updatePersonStatus() {
+        updateStatus("$personLoadedCount of ${personMovies.size} movies")
+    }
 
     private fun showRadarrOptions(movie: Movie) {
         val actions = arrayOf(
@@ -935,6 +1264,11 @@ class MainActivity : Activity() {
             if (tmdbId > 0) libraryStates[tmdbId] = LibraryState(added.downloaded)
             exploreMovies = exploreMovies.map(::markLibraryState)
             if (currentScreen == Screen.EXPLORE) adapter.replace(exploreMovies)
+            activeMovieDetails?.takeIf { it.movie.raw.optInt("tmdbId", 0) == tmdbId }?.let { details ->
+                val refreshed = details.copy(movie = markLibraryState(details.movie))
+                activeMovieDetails = refreshed
+                if (currentScreen == Screen.MOVIE_DETAILS) showMovieDetails(refreshed)
+            }
             updateStatus("Added to Radarr")
             toast("${added.title} added to Radarr as ${if (monitored) "monitored" else "unmonitored"} with ${profile.name}")
         })
@@ -949,17 +1283,22 @@ class MainActivity : Activity() {
 
     private fun showCustomExplore(title: String, movies: List<Movie>) {
         if (currentScreen == Screen.EXPLORE && explorePrevious == null) {
-            explorePrevious = ExploreSnapshot(exploreCategory, exploreTitle, explorePage, exploreTotalPages, exploreMovies, customFilterActive)
+            explorePrevious = ExploreSnapshot(
+                exploreCategory, exploreTitle, explorePage, exploreTotalPages,
+                exploreTotalResults, exploreUsesPagination, exploreMovies, customFilterActive
+            )
         }
         currentScreen = Screen.EXPLORE
         customFilterActive = null
         exploreTitle = title
         explorePage = 1
         exploreTotalPages = 1
+        exploreTotalResults = movies.size
+        exploreUsesPagination = false
         exploreMovies = movies.map(::markLibraryState)
         setActiveNav(exploreNav)
         renderExplore()
-        updateStatus("${exploreMovies.size} movies")
+        updateExploreStatus()
         findGrid()?.requestFocus()
     }
 
@@ -971,30 +1310,7 @@ class MainActivity : Activity() {
     }
 
     private fun showMovie(movie: Movie) {
-        val trailerId = movie.raw.optString("youTubeTrailerId").trim()
-        val text = buildString {
-            if (movie.year > 0) append("${movie.year} • ")
-            append(movie.status.replaceFirstChar { it.uppercase() })
-            if (movie.downloaded) append(" • Downloaded")
-            append("\n\n${movie.overview}")
-            if (!movie.inLibrary) {
-                append("\n\nProfile: ${selectedProfile?.name ?: "not available"}")
-                append("\nFolder: ${selectedRoot?.path ?: "not available"}")
-            }
-        }
-        val dialog = AlertDialog.Builder(this)
-            .setTitle(movie.title)
-            .setMessage(text)
-            .setNegativeButton("Close", null)
-        if (!movie.inLibrary) {
-            dialog.setPositiveButton("Radarr options") { _, _ -> showRadarrOptions(movie) }
-        } else {
-            dialog.setPositiveButton("Search releases") { _, _ -> loadReleases(movie) }
-        }
-        if (trailerId.isNotEmpty()) {
-            dialog.setNeutralButton("Trailer") { _, _ -> openTrailer(trailerId) }
-        }
-        dialog.show()
+        openMovieDetails(movie)
     }
 
     private fun openTrailer(trailerId: String) {
@@ -1309,12 +1625,37 @@ class MainActivity : Activity() {
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(36)).apply { rightMargin = dp(6) }
     }
 
+    private fun topNavButton(label: String, icon: Int, action: () -> Unit) = Button(this).apply {
+        text = label
+        textSize = 12f
+        isAllCaps = false
+        gravity = Gravity.CENTER
+        setTextColor(Dracula.Comment)
+        background = getDrawable(R.drawable.top_nav_tab)
+        setCompoundDrawablesWithIntrinsicBounds(icon, 0, 0, 0)
+        compoundDrawablePadding = dp(7)
+        minWidth = 0
+        minimumWidth = 0
+        minHeight = 0
+        minimumHeight = 0
+        setPadding(dp(12), 0, dp(12), 0)
+        setOnFocusChangeListener { _, focused ->
+            setTextColor(if (focused) Dracula.Foreground else Dracula.Comment)
+        }
+        setOnClickListener { action() }
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(40)).apply {
+            rightMargin = dp(7)
+        }
+    }
+
     private fun setActiveNav(active: Button) {
-        searchNav.isSelected = active === searchNav
-        exploreNav.isSelected = active === exploreNav
-        queueNav.isSelected = active === queueNav
-        profileNav.isSelected = active === profileNav
-        settingsNav.isSelected = active === settingsNav
+        listOf(searchNav, exploreNav, queueNav, profileNav, settingsNav).forEach { button ->
+            val selected = button === active
+            button.isSelected = selected
+            if (!button.hasFocus()) {
+                button.setTextColor(if (selected) Dracula.Foreground else Dracula.Comment)
+            }
+        }
     }
 
     private fun updateActiveNav() {
@@ -1322,6 +1663,11 @@ class MainActivity : Activity() {
             Screen.EXPLORE -> exploreNav
             Screen.QUEUE -> queueNav
             Screen.SETTINGS -> settingsNav
+            Screen.PERSON -> if (personParentScreen == Screen.EXPLORE) exploreNav else searchNav
+            Screen.MOVIE_DETAILS, Screen.CAST -> if (
+                detailReturnScreen == Screen.EXPLORE ||
+                detailReturnScreen == Screen.PERSON && personParentScreen == Screen.EXPLORE
+            ) exploreNav else searchNav
             else -> searchNav
         })
     }
@@ -1375,7 +1721,8 @@ class MainActivity : Activity() {
             maximumVotes = prefs.getInt(CUSTOM_MAX_VOTES_KEY, 0),
             minimumRating = prefs.getInt(CUSTOM_RATING_KEY, 0),
             maximumResults = prefs.getInt(CUSTOM_RESULTS_KEY, 40),
-            excludeInRadarr = prefs.getBoolean(CUSTOM_EXCLUDE_RADARR_KEY, false)
+            excludeInRadarr = prefs.getBoolean(CUSTOM_EXCLUDE_RADARR_KEY, false),
+            excludeLikelyShortFilms = prefs.getBoolean(CUSTOM_EXCLUDE_SHORT_FILMS_KEY, false)
         )
     }
 
@@ -1390,6 +1737,7 @@ class MainActivity : Activity() {
             .putInt(CUSTOM_RATING_KEY, filter.minimumRating)
             .putInt(CUSTOM_RESULTS_KEY, filter.maximumResults)
             .putBoolean(CUSTOM_EXCLUDE_RADARR_KEY, filter.excludeInRadarr)
+            .putBoolean(CUSTOM_EXCLUDE_SHORT_FILMS_KEY, filter.excludeLikelyShortFilms)
             .apply()
     }
 
@@ -1450,7 +1798,10 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun updateStatus(value: String) { status.text = value }
+    private fun updateStatus(value: String) {
+        status.text = value
+        status.visibility = if (value.isBlank()) View.GONE else View.VISIBLE
+    }
     private fun toast(value: String) { Toast.makeText(this, value, Toast.LENGTH_LONG).show() }
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
@@ -1479,6 +1830,21 @@ class MainActivity : Activity() {
             returnFromReleases()
             return
         }
+        if (currentScreen == Screen.CAST) {
+            activeMovieDetails?.let(::showMovieDetails) ?: returnFromMovieDetails()
+            return
+        }
+        if (currentScreen == Screen.PERSON) {
+            personOriginDetails?.let { origin ->
+                activeMovieDetails = origin
+                showCast(origin)
+            } ?: returnFromMovieDetails()
+            return
+        }
+        if (currentScreen == Screen.MOVIE_DETAILS) {
+            returnFromMovieDetails()
+            return
+        }
         if (currentScreen == Screen.EXPLORE && explorePrevious != null) {
             val previous = explorePrevious ?: return
             explorePrevious = null
@@ -1486,10 +1852,12 @@ class MainActivity : Activity() {
             exploreTitle = previous.title
             explorePage = previous.page
             exploreTotalPages = previous.totalPages
+            exploreTotalResults = previous.totalResults
+            exploreUsesPagination = previous.usesPagination
             exploreMovies = previous.movies
             customFilterActive = previous.customFilter
             renderExplore()
-            updateStatus("${exploreMovies.size} movies")
+            updateExploreStatus()
             return
         }
         if (currentScreen != Screen.SEARCH || searchHasResults) {
@@ -1508,16 +1876,31 @@ class MainActivity : Activity() {
     }
 
     private fun returnFromReleases() {
-        if (releaseReturnScreen == Screen.EXPLORE) showExplore() else showSearch()
+        when (releaseReturnScreen) {
+            Screen.MOVIE_DETAILS -> activeMovieDetails?.let(::showMovieDetails) ?: showSearch()
+            Screen.EXPLORE -> showExplore()
+            else -> showSearch()
+        }
     }
 
-    private enum class Screen { SEARCH, EXPLORE, QUEUE, RELEASES, SETTINGS }
+    private fun returnFromMovieDetails() {
+        activeMovieDetails = null
+        when (detailReturnScreen) {
+            Screen.EXPLORE -> showExplore()
+            Screen.PERSON -> renderPersonFilmography()
+            else -> showSearch(preserveResults = true)
+        }
+    }
+
+    private enum class Screen { SEARCH, EXPLORE, QUEUE, RELEASES, MOVIE_DETAILS, CAST, PERSON, SETTINGS }
 
     private data class ExploreSnapshot(
         val category: ExploreCategory,
         val title: String,
         val page: Int,
         val totalPages: Int,
+        val totalResults: Int,
+        val usesPagination: Boolean,
         val movies: List<Movie>,
         val customFilter: CustomDiscoverFilter?
     )
@@ -1548,6 +1931,8 @@ class MainActivity : Activity() {
         const val CUSTOM_RATING_KEY = "custom_discover_rating"
         const val CUSTOM_RESULTS_KEY = "custom_discover_results"
         const val CUSTOM_EXCLUDE_RADARR_KEY = "custom_discover_exclude_radarr"
+        const val CUSTOM_EXCLUDE_SHORT_FILMS_KEY = "custom_discover_exclude_short_films"
+        const val PERSON_PAGE_SIZE = 20
 
         val MOVIE_GENRES = listOf(
             28 to "Action", 12 to "Adventure", 16 to "Animation", 35 to "Comedy",

@@ -46,12 +46,17 @@ class TmdbClient(
                 }
                 if (start != null && end != null && start.isAfter(end)) null else start to end
             }
-        if (ranges.isEmpty()) return TmdbPage(emptyList(), page, page)
+        if (ranges.isEmpty()) return TmdbPage(emptyList(), page, page, 0)
         val attempts = ranges.map { (start, end) -> runCatching { discoverRange(filter, page, start, end) } }
         val pages = attempts.mapNotNull { it.getOrNull() }
         if (pages.isEmpty()) throw attempts.firstNotNullOf { it.exceptionOrNull() }
         val movies = pages.flatMap { it.movies }.distinctBy { it.raw.optInt("tmdbId") }
-        return TmdbPage(sortDiscovered(movies, filter.sort), page, pages.maxOfOrNull { it.totalPages } ?: page)
+        return TmdbPage(
+            movies = sortDiscovered(movies, filter.sort),
+            page = page,
+            totalPages = pages.maxOfOrNull { it.totalPages } ?: page,
+            totalResults = pages.sumOf { it.totalResults }
+        )
     }
 
     private fun discoverRange(filter: CustomDiscoverFilter, page: Int, startDate: LocalDate?, endDate: LocalDate?): TmdbPage {
@@ -124,6 +129,8 @@ class TmdbClient(
         val recommendationsRoot = optionalResults("movie/$tmdbId/recommendations?language=en-US")
             .takeIf { it.length() > 0 }
             ?: optionalResults("movie/$tmdbId/similar?language=en-US")
+        val credits = optionalObject("movie/$tmdbId/credits?language=en-US")
+        val cast = credits?.optJSONArray("cast") ?: JSONArray()
         return TmdbMovieDetails(
             movie = movie(root),
             runtimeMinutes = root.optInt("runtime", 0),
@@ -134,8 +141,47 @@ class TmdbClient(
             trailerId = trailerId,
             collectionId = collection?.optInt("id", 0)?.takeIf { it > 0 },
             collectionName = collection?.optString("name")?.takeIf { it.isNotBlank() },
-            recommendations = (0 until recommendationsRoot.length()).mapNotNull { recommendationsRoot.optJSONObject(it)?.let(::movie) }
+            recommendations = (0 until recommendationsRoot.length()).mapNotNull { recommendationsRoot.optJSONObject(it)?.let(::movie) },
+            cast = (0 until cast.length()).mapNotNull { cast.optJSONObject(it) }
+                .sortedBy { it.optInt("order", Int.MAX_VALUE) }
+                .mapNotNull { person ->
+                    person.optString("name").takeIf(String::isNotBlank)?.let { name ->
+                        CastMember(
+                            tmdbId = person.optInt("id", 0),
+                            name = name,
+                            character = person.optString("character").ifBlank { "Cast" },
+                            profileUrl = person.optString("profile_path")
+                                .takeIf { it.isNotBlank() && it != "null" }
+                                ?.let { "https://image.tmdb.org/t/p/w342$it" }
+                        )
+                    }
+                }.take(30)
         )
+    }
+
+    /**
+     * TMDB discovery results omit runtime. A missing runtime is deliberately kept
+     * distinct from a short runtime so Custom Explore can retain incomplete titles.
+     */
+    fun runtimeMinutes(tmdbId: Int): Int = JSONObject(
+        request("movie/$tmdbId?language=en-US", 24 * 60 * 60 * 1000L)
+    ).optInt("runtime", 0)
+
+    /**
+     * A person's cast credits are returned as one lightweight TMDB payload. The UI
+     * reveals them in pages, so a prolific actor never creates a huge first grid.
+     */
+    fun personMovieCredits(personId: Int): List<Movie> {
+        require(personId > 0) { "TMDB person ID is missing" }
+        val root = JSONObject(request("person/$personId/movie_credits?language=en-US", 24 * 60 * 60 * 1000L))
+        val cast = root.optJSONArray("cast") ?: JSONArray()
+        return (0 until cast.length()).mapNotNull { cast.optJSONObject(it)?.let(::movie) }
+            .distinctBy { it.raw.optInt("tmdbId", 0) }
+            .sortedWith(
+                compareByDescending<Movie> { it.raw.optString("release_date") }
+                    .thenByDescending { it.raw.optDouble("popularity", 0.0) }
+                    .thenBy { it.title }
+            )
     }
 
     fun collection(collectionId: Int): Pair<String, List<Movie>> {
@@ -151,7 +197,8 @@ class TmdbClient(
         return TmdbPage(
             movies = (0 until results.length()).mapNotNull { results.optJSONObject(it)?.let(::movie) },
             page = root.optInt("page", 1),
-            totalPages = root.optInt("total_pages", 1).coerceAtMost(500)
+            totalPages = root.optInt("total_pages", 1).coerceAtMost(500),
+            totalResults = root.optInt("total_results", results.length())
         )
     }
 

@@ -72,10 +72,12 @@ class MovieAdapter(
             val posterFrame = FrameLayout(context).apply {
                 isDuplicateParentStateEnabled = true
                 background = context.getDrawable(R.drawable.poster_panel)
-                setPadding(dp(4), dp(4), dp(4), dp(4))
+                // The rounded frame supplies the outline; clip the bitmap to it
+                // instead of nesting a square image inside extra padding.
+                clipToOutline = true
             }
             val poster = ImageView(context).apply {
-                scaleType = ImageView.ScaleType.FIT_CENTER
+                scaleType = ImageView.ScaleType.CENTER_CROP
                 setImageDrawable(ColorDrawable(Dracula.BackgroundDarker))
                 setBackgroundColor(Dracula.BackgroundDarker)
             }
@@ -121,7 +123,10 @@ class MovieAdapter(
         val edgeGutter = dp(4)
         val innerCardHeight = (maxCardHeight - edgeGutter * 2).coerceAtLeast(dp(240))
         val innerWidth = (cardWidth - dp(16)).coerceAtLeast(dp(120))
-        val textAreaHeight = dp(60)
+        // A focused card can have a two-line title. Reserve enough room for
+        // both title lines and the year/status line so the latter is never
+        // clipped at the bottom of the card.
+        val textAreaHeight = dp(80)
         val verticalPadding = dp(8)
         val availablePosterHeight = (innerCardHeight - textAreaHeight - verticalPadding).coerceAtLeast(dp(180))
         val posterHeight = minOf(innerWidth * 3 / 2, availablePosterHeight)
