@@ -118,5 +118,6 @@ data class CustomDiscoverFilter(
     val minimumRating: Int = 0,
     val maximumResults: Int = 40,
     val excludeInRadarr: Boolean = false,
-    val excludeLikelyShortFilms: Boolean = false
+    val excludeLikelyShortFilms: Boolean = false,
+    val requireTrailer: Boolean = false
 )

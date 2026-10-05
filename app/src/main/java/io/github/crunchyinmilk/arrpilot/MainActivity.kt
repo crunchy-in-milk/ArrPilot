@@ -52,7 +52,7 @@ class MainActivity : Activity() {
     private var searchHasResults = false
     private var searchMovies = emptyList<Movie>()
     private var searchTerm = ""
-    private var pendingMovieFocusTmdbId: Int? = null
+    private val pendingMovieFocusTmdbIds = mutableMapOf<Screen, Int>()
     private var pendingCastFocusTmdbId: Int? = null
     private var temporaryMovie: Movie? = null
     private var previewCommitInProgress = false
@@ -344,7 +344,7 @@ class MainActivity : Activity() {
             searchHasResults = false
             searchMovies = emptyList()
             searchTerm = ""
-            pendingMovieFocusTmdbId = null
+            pendingMovieFocusTmdbIds.clear()
             adapter.replace(emptyList())
         } else {
             searchHasResults = searchMovies.isNotEmpty()
@@ -399,8 +399,7 @@ class MainActivity : Activity() {
         content.addView(section)
         val grid = movieGrid()
         content.addView(grid, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        restoreMovieGridFocus(grid)
-        if (pendingMovieFocusTmdbId == null) input.requestFocus()
+        restoreMovieGridFocus(grid, Screen.SEARCH) { input.requestFocus() }
     }
 
     private fun runSearch(term: String) {
@@ -456,12 +455,16 @@ class MainActivity : Activity() {
         stretchMode = GridView.NO_STRETCH
         clipToPadding = true
         isVerticalScrollBarEnabled = false
+        isFocusable = true
+        isFocusableInTouchMode = true
         setPadding(0, 0, 0, 0)
         selector = android.graphics.drawable.ColorDrawable(Color.TRANSPARENT)
         adapter = this@MainActivity.adapter
         setOnItemClickListener { _, _, position, _ ->
             val movie = this@MainActivity.adapter.getItem(position)
-            pendingMovieFocusTmdbId = movie.raw.optInt("tmdbId", 0).takeIf { it > 0 }
+            movie.raw.optInt("tmdbId", 0).takeIf { it > 0 }?.let { tmdbId ->
+                pendingMovieFocusTmdbIds[currentScreen] = tmdbId
+            }
             onMovieClick(movie)
         }
         if (onNearEnd != null) {
@@ -487,15 +490,34 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun restoreMovieGridFocus(grid: GridView) {
-        val tmdbId = pendingMovieFocusTmdbId ?: return
+    private fun restoreMovieGridFocus(grid: GridView, screen: Screen, fallback: (() -> Unit)? = null) {
+        val tmdbId = pendingMovieFocusTmdbIds[screen] ?: run {
+            fallback?.invoke()
+            return
+        }
         grid.post {
             val position = (0 until adapter.count).firstOrNull { index ->
                 adapter.getItem(index).raw.optInt("tmdbId", 0) == tmdbId
-            } ?: return@post
+            } ?: run {
+                if (pendingMovieFocusTmdbIds[screen] == tmdbId) pendingMovieFocusTmdbIds.remove(screen)
+                fallback?.invoke()
+                return@post
+            }
             grid.setSelection(position)
-            grid.requestFocus()
-            pendingMovieFocusTmdbId = null
+            // The movie grid's card sizing triggers one more layout pass. Apply the
+            // focus after it so Android does not hand focus back to the search box.
+            fun requestRestoredFocus(attempt: Int) {
+                grid.setSelection(position)
+                if (grid.requestFocus()) {
+                    if (pendingMovieFocusTmdbIds[screen] == tmdbId) pendingMovieFocusTmdbIds.remove(screen)
+                } else if (attempt < 2) {
+                    grid.postDelayed({ requestRestoredFocus(attempt + 1) }, 50)
+                } else {
+                    if (pendingMovieFocusTmdbIds[screen] == tmdbId) pendingMovieFocusTmdbIds.remove(screen)
+                    fallback?.invoke()
+                }
+            }
+            grid.postDelayed({ requestRestoredFocus(0) }, 75)
         }
     }
 
@@ -506,8 +528,13 @@ class MainActivity : Activity() {
                 castAdapter.getItem(index).tmdbId == tmdbId
             } ?: return@post
             grid.setSelection(position)
-            grid.requestFocus()
-            pendingCastFocusTmdbId = null
+            // showCast schedules its geometry pass first; restore after that pass
+            // so the focused card is not replaced by the first cast member.
+            grid.post {
+                grid.setSelection(position)
+                grid.requestFocus()
+                pendingCastFocusTmdbId = null
+            }
         }
     }
 
@@ -535,7 +562,7 @@ class MainActivity : Activity() {
         ExploreCategory.entries.forEachIndexed { index, category ->
             categoryRow.addView(navButton(category.label) {
                 if (exploreCategory != category || explorePrevious != null || customFilterActive != null) {
-                    pendingMovieFocusTmdbId = null
+                    pendingMovieFocusTmdbIds.remove(Screen.EXPLORE)
                     exploreCategory = category
                     exploreTitle = category.label
                     explorePrevious = null
@@ -590,7 +617,7 @@ class MainActivity : Activity() {
             }
         }
         content.addView(grid, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-        restoreMovieGridFocus(grid)
+        restoreMovieGridFocus(grid, Screen.EXPLORE)
     }
 
     private fun loadExplorePage(reset: Boolean) {
@@ -648,6 +675,7 @@ class MainActivity : Activity() {
         lateinit var resultsButton: Button
         lateinit var radarrButton: Button
         lateinit var likelyShortFilmsButton: Button
+        lateinit var trailerButton: Button
         genreButton = filterSettingButton("Genres", genresSummary(draft.genreIds)) {
             showGenrePicker(draft.genreIds) { ids ->
                 draft = draft.copy(genreIds = ids)
@@ -717,7 +745,14 @@ class MainActivity : Activity() {
                 likelyShortFilmsButton.text = filterSettingText("Likely short films", values[which])
             }
         }
-        listOf(genreButton, sortButton, releaseButton, periodButton, votesButton, maximumVotesButton, ratingButton, resultsButton, radarrButton, likelyShortFilmsButton)
+        trailerButton = filterSettingButton("Has trailer", if (draft.requireTrailer) "Required" else "Any") {
+            val values = listOf("Any", "Required")
+            chooseFilterOption("Has trailer", values, if (draft.requireTrailer) 1 else 0) { which ->
+                draft = draft.copy(requireTrailer = which == 1)
+                trailerButton.text = filterSettingText("Has trailer", values[which])
+            }
+        }
+        listOf(genreButton, sortButton, releaseButton, periodButton, votesButton, maximumVotesButton, ratingButton, resultsButton, radarrButton, likelyShortFilmsButton, trailerButton)
             .forEach { panel.addView(it, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply { bottomMargin = dp(2) }) }
         val scroll = ScrollView(this).apply { addView(panel) }
         val dialog = AlertDialog.Builder(this)
@@ -794,7 +829,7 @@ class MainActivity : Activity() {
     }
 
     private fun applyCustomFilter(filter: CustomDiscoverFilter) {
-        pendingMovieFocusTmdbId = null
+        pendingMovieFocusTmdbIds.remove(Screen.EXPLORE)
         customDraft = filter
         saveCustomFilter(filter)
         customFilterActive = filter
@@ -829,12 +864,17 @@ class MainActivity : Activity() {
                 libraryStatesLoaded = true
             }
             val page = tmdb.discover(filter, requestedPage)
-            if (!filter.excludeLikelyShortFilms) page else page.copy(
+            if (!filter.excludeLikelyShortFilms && !filter.requireTrailer) page else page.copy(
                 movies = page.movies.filter { movie ->
-                    // Keep unknown runtimes. A lookup failure is treated the same way
-                    // so an intermittent TMDB error never silently hides a title.
-                    val runtime = runCatching { tmdb.runtimeMinutes(movie.raw.optInt("tmdbId", 0)) }.getOrDefault(0)
-                    runtime == 0 || runtime >= 20
+                    val tmdbId = movie.raw.optInt("tmdbId", 0)
+                    val runtimeEligible = if (!filter.excludeLikelyShortFilms) true else {
+                        // Keep unknown runtimes. A lookup failure is treated the same
+                        // way so an intermittent TMDB error never silently hides a title.
+                        val runtime = runCatching { tmdb.runtimeMinutes(tmdbId) }.getOrDefault(0)
+                        runtime == 0 || runtime >= 20
+                    }
+                    val trailerEligible = !filter.requireTrailer || tmdb.hasTrailer(tmdbId)
+                    runtimeEligible && trailerEligible
                 }
             )
         }, { page ->
@@ -887,6 +927,7 @@ class MainActivity : Activity() {
         if (filter.minimumRating > 0) add("${filter.minimumRating}+/10")
         if (filter.excludeInRadarr) add("Hiding Radarr movies")
         if (filter.excludeLikelyShortFilms) add("Hiding likely short films")
+        if (filter.requireTrailer) add("Has trailer")
     }.joinToString(" • ")
 
     private fun markLibraryState(movie: Movie): Movie {
@@ -1201,8 +1242,9 @@ class MainActivity : Activity() {
         val grid = movieGrid(::openMovieDetails) { loadMorePersonMovies() }
         content.addView(grid, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         updatePersonStatus()
-        restoreMovieGridFocus(grid)
-        if (pendingMovieFocusTmdbId == null) grid.post { if (personMovies.isNotEmpty()) grid.requestFocus() }
+        restoreMovieGridFocus(grid, Screen.PERSON) {
+            grid.post { if (personMovies.isNotEmpty()) grid.requestFocus() }
+        }
     }
 
     private fun loadMorePersonMovies() {
@@ -1722,7 +1764,8 @@ class MainActivity : Activity() {
             minimumRating = prefs.getInt(CUSTOM_RATING_KEY, 0),
             maximumResults = prefs.getInt(CUSTOM_RESULTS_KEY, 40),
             excludeInRadarr = prefs.getBoolean(CUSTOM_EXCLUDE_RADARR_KEY, false),
-            excludeLikelyShortFilms = prefs.getBoolean(CUSTOM_EXCLUDE_SHORT_FILMS_KEY, false)
+            excludeLikelyShortFilms = prefs.getBoolean(CUSTOM_EXCLUDE_SHORT_FILMS_KEY, false),
+            requireTrailer = prefs.getBoolean(CUSTOM_REQUIRE_TRAILER_KEY, false)
         )
     }
 
@@ -1738,6 +1781,7 @@ class MainActivity : Activity() {
             .putInt(CUSTOM_RESULTS_KEY, filter.maximumResults)
             .putBoolean(CUSTOM_EXCLUDE_RADARR_KEY, filter.excludeInRadarr)
             .putBoolean(CUSTOM_EXCLUDE_SHORT_FILMS_KEY, filter.excludeLikelyShortFilms)
+            .putBoolean(CUSTOM_REQUIRE_TRAILER_KEY, filter.requireTrailer)
             .apply()
     }
 
@@ -1837,6 +1881,10 @@ class MainActivity : Activity() {
         if (currentScreen == Screen.PERSON) {
             personOriginDetails?.let { origin ->
                 activeMovieDetails = origin
+                // A movie opened from this filmography may have changed
+                // detailReturnScreen to PERSON. Returning through Cast must resume
+                // the original movie's parent instead, or Back loops forever.
+                detailReturnScreen = personParentScreen
                 showCast(origin)
             } ?: returnFromMovieDetails()
             return
@@ -1932,6 +1980,7 @@ class MainActivity : Activity() {
         const val CUSTOM_RESULTS_KEY = "custom_discover_results"
         const val CUSTOM_EXCLUDE_RADARR_KEY = "custom_discover_exclude_radarr"
         const val CUSTOM_EXCLUDE_SHORT_FILMS_KEY = "custom_discover_exclude_short_films"
+        const val CUSTOM_REQUIRE_TRAILER_KEY = "custom_discover_require_trailer"
         const val PERSON_PAGE_SIZE = 20
 
         val MOVIE_GENRES = listOf(

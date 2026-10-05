@@ -6,6 +6,20 @@ The project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-04
+
+### Navigation and focus
+
+- Prevent Back from looping between a person filmography, cast list, and movie overview by restoring the original movie's return destination
+- Remember movie focus independently for Search, Explore, and person filmographies so nested browsing cannot overwrite or consume another screen's saved card
+- Restore the exact cast member after returning from a person filmography
+- Delay and retry grid focus restoration until responsive card layout is complete, with a safe fallback when the saved movie is no longer present
+
+### Custom discovery
+
+- Add a persistent “Has trailer” filter that can limit Custom Explore to movies with a playable YouTube trailer
+- Reuse the movie overview's trailer-selection logic so every filtered result offers the same Trailer action when opened
+
 ## [0.2.0] - 2026-09-28
 
 ### Android TV experience

@@ -116,14 +116,7 @@ class TmdbClient(
         // optional relationship contains badly encoded metadata. Keep the core movie
         // request independent so the Radarr workflow remains usable in that case.
         val root = JSONObject(request("movie/$tmdbId?language=en-US", 24 * 60 * 60 * 1000L))
-        val videos = optionalResults("movie/$tmdbId/videos?language=en-US")
-        val trailerId = (0 until videos.length()).mapNotNull { videos.optJSONObject(it) }
-            .filter { it.optString("site") == "YouTube" }
-            .sortedByDescending {
-                (if (it.optString("type") == "Trailer") 4 else 0) +
-                    (if (it.optBoolean("official")) 2 else 0) +
-                    (if (it.optString("iso_639_1") == "en") 1 else 0)
-            }.firstOrNull()?.optString("key")?.takeIf { it.isNotBlank() }
+        val trailerId = findTrailerId(tmdbId)
         val collection = root.optJSONObject("belongs_to_collection")
         val genres = root.optJSONArray("genres") ?: JSONArray()
         val recommendationsRoot = optionalResults("movie/$tmdbId/recommendations?language=en-US")
@@ -157,6 +150,20 @@ class TmdbClient(
                     }
                 }.take(30)
         )
+    }
+
+    /** True when the movie overview can offer a playable YouTube trailer. */
+    fun hasTrailer(tmdbId: Int): Boolean = findTrailerId(tmdbId) != null
+
+    private fun findTrailerId(tmdbId: Int): String? {
+        val videos = optionalResults("movie/$tmdbId/videos?language=en-US")
+        return (0 until videos.length()).mapNotNull { videos.optJSONObject(it) }
+            .filter { it.optString("site") == "YouTube" }
+            .sortedByDescending {
+                (if (it.optString("type") == "Trailer") 4 else 0) +
+                    (if (it.optBoolean("official")) 2 else 0) +
+                    (if (it.optString("iso_639_1") == "en") 1 else 0)
+            }.firstOrNull()?.optString("key")?.takeIf { it.isNotBlank() }
     }
 
     /**
